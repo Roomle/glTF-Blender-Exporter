@@ -40,6 +40,8 @@ def get_used_materials():
     for blender_material in bpy.data.materials:
         if blender_material.node_tree and blender_material.use_nodes:
             for currentNode in blender_material.node_tree.nodes:
+                if type(currentNode) == bpy.types.ShaderNodeBsdfPrincipled:
+                    materials.append(blender_material)
                 if isinstance(currentNode, bpy.types.ShaderNodeGroup):
                     if currentNode.node_tree.name.startswith('glTF Metallic Roughness'):
                         materials.append(blender_material)
@@ -158,6 +160,53 @@ def get_texture_index_by_node_group(export_settings, glTF, name, shader_node_gro
 
     return get_texture_index_by_image(glTF, from_node.image)
 
+def get_texture_index_by_principled(export_settings, glTF, name, node):
+    """
+    Return the texture index in the glTF array.
+    """
+
+    if node is None:
+        return -1
+    
+    if not isinstance(node, bpy.types.ShaderNodeBsdfPrincipled):
+        return -1
+
+    if node.inputs.get(name) is None:
+        return -1
+    
+    if len(node.inputs[name].links) == 0:
+        return -1
+    
+    from_node = node.inputs[name].links[0].from_node
+    
+    #
+
+    if not isinstance(from_node, bpy.types.ShaderNodeTexImage):
+        if isinstance(from_node, bpy.types.ShaderNodeMixRGB):
+            for inp in from_node.inputs:
+                if len(inp.links)<1:
+                    continue
+                tmp = inp.links[0].from_node
+                if isinstance(tmp, bpy.types.ShaderNodeTexImage):
+                    from_node = tmp
+                    break
+            if not isinstance(from_node, bpy.types.ShaderNodeTexImage):
+                return -1
+        elif isinstance(from_node, bpy.types.ShaderNodeNormalMap):
+            inp = from_node.inputs['Color']
+            if len(inp.links)>0:
+                tmp = inp.links[0].from_node
+                if isinstance(tmp, bpy.types.ShaderNodeTexImage):
+                    from_node = tmp
+        else:
+            return -1
+    #TODO: support mix node
+
+    if from_node.image is None or from_node.image.size[0] == 0 or from_node.image.size[1] == 0:
+        return -1
+
+    print('testing image {}'.format(from_node.image))
+    return get_texture_index_by_image(glTF, from_node.image)
 
 def get_texcoord_index(glTF, name, shader_node_group):
     """

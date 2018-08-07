@@ -210,6 +210,14 @@ def filter_apply(export_settings):
                     for blender_socket in blender_node.outputs:
                         if blender_socket.is_linked:
                             for blender_link in blender_socket.links:
+                                to_node = blender_link.to_node
+                                if isinstance(to_node, bpy.types.ShaderNodeMixRGB):
+                                    to_node = to_node.outputs['Color'].links[0].to_node
+                                elif isinstance(to_node, bpy.types.ShaderNodeNormalMap):
+                                    to_node = to_node.outputs['Normal'].links[0].to_node
+                                if isinstance(to_node, bpy.types.ShaderNodeBsdfPrincipled):
+                                    add_node = True
+                                    break
                                 if isinstance(blender_link.to_node, bpy.types.ShaderNodeGroup):
                                     if blender_link.to_node.node_tree.name.startswith('glTF Metallic Roughness') or blender_link.to_node.node_tree.name.startswith('glTF Specular Glossiness'):
                                         add_node = True
