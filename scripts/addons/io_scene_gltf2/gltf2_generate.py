@@ -2239,116 +2239,174 @@ def generate_materials(operator,
             # Cycles Render.
             #
 
-            for blender_node in blender_material.node_tree.nodes:
+            main_output_node = None
+            principled_node = None
+            alpha_mix_node = None
+            alpha_invert = False
+            for node in blender_material.node_tree.nodes:
+                if type(node) == bpy.types.ShaderNodeOutputMaterial:
+                    output_node = node
+                    surface = node.inputs['Surface']
+                    if surface.is_linked:
+                        main_output_node = surface.links[0].from_node
+                        if isinstance(main_output_node, bpy.types.ShaderNodeBsdfPrincipled):
+                            print('{} is princ'.format(blender_material.name))
+                            principled_node = main_output_node
+                        elif isinstance(main_output_node, bpy.types.ShaderNodeMixShader):
+                            print('{} is mix'.format(blender_material.name))
+                            for i in range(1,3):
+                                inp = main_output_node.inputs[i]
+                                if inp.is_linked:
+                                    input_node = inp.links[0].from_node
+                                    print('{} test node type {}'.format(blender_material.name,type(input_node)))
+                                    if isinstance(input_node, bpy.types.ShaderNodeBsdfPrincipled):
+                                        print('{} has princ'.format(blender_material.name))
+                                        principled_node = input_node
+                                    elif isinstance(input_node, bpy.types.ShaderNodeBsdfTransparent):
+                                        print('{} has transp'.format(blender_material.name))
+                                        alpha_mix_node = main_output_node
+                                        alpha_invert = i==2
 
-                if type(blender_node) == bpy.types.ShaderNodeBsdfPrincipled:
+            if principled_node:
 
-                    material['pbrMetallicRoughness'] = {}
-                    pbrMetallicRoughness = material['pbrMetallicRoughness']
+                print('principled {}'.format(blender_material.name))
+
+                material['pbrMetallicRoughness'] = {}
+                pbrMetallicRoughness = material['pbrMetallicRoughness']
+                
+                #
+                # Base color texture
+                #
+                base_color_texture_index = get_texture_index(export_settings, glTF, bpy.types.ShaderNodeBsdfPrincipled, 'Base Color', principled_node)
+                print('texture index for {}: {}'.format(blender_material.name,base_color_texture_index))
+
+                #
+                # Base color factor
+                #
+                color = [1.0, 1.0, 1.0, 1.0]
+                base_color_input = principled_node.inputs['Base Color']
+                if base_color_input.is_linked:
+                    color = base_color_input.default_value
+
+                color = get_base_color_principled(principled_node)
+
+                baseColorFactor = get_vec4(color, [1.0, 1.0, 1.0, 1.0])
+                if baseColorFactor[0] != 1.0 or baseColorFactor[1] != 1.0 or baseColorFactor[2] != 1.0 or \
+                        baseColorFactor[3] != 1.0:
+                    pbrMetallicRoughness['baseColorFactor'] = baseColorFactor
+
+                #
+                # Metallic factor
+                #
+                metallicFactor = get_scalar(principled_node.inputs['Metallic'].default_value, 1.0)
+                if metallicFactor != 1.0:
+                    pbrMetallicRoughness['metallicFactor'] = metallicFactor
+
+                #
+                # Roughness factor
+                #
+                roughnessFactor = get_scalar(principled_node.inputs['Roughness'].default_value, 1.0)
+                if roughnessFactor != 1.0:
+                    pbrMetallicRoughness['roughnessFactor'] = roughnessFactor
+
+                material['name'] = blender_material.name
+                materials.append(material)
+
+                #
+                # Alpha Texture
+                #
+                alpha_value = 1
+                alpha_mode = None
+                if alpha_mix_node:
+                    if alpha_mix_node.inputs['Fac'].is_linked:
+                        index = get_texture_index(export_settings, glTF, bpy.types.ShaderNodeMixShader, 'Fac', alpha_mix_node)
+                        if index >= 0:
+                            alpha_mode = 'MASK'
+                            material['alphaCutoff'] = 0.5
+                            
+                            if base_color_texture_index < 0:
+                                base_color_texture_index = index
+                            elif base_color_texture_index != index:
+                                raise Exception('Color and Alpha texture are not identical!')
+                    else:
+                        alpha_value = alpha_mix_node.inputs['Fac'].default_value
+                
+                #
+                # Alpha
+                #
+                transmission = get_scalar(principled_node.inputs['Transmission'].default_value, 0.0)
+                print('transmission {}'.format(transmission))
+                if alpha_value>=1.0 and transmission > 0.0:
+                    alpha_value = 1-transmission
+                
+                if alpha_value < 1.0:
+                    alpha_mode = 'BLEND'
                     
-                    #
-                    # Base color texture
-                    #
-                    index = get_texture_index_by_principled(export_settings, glTF, 'Base Color', blender_node)
-                    print('texture index for {}: {}'.format(blender_material.name,index))
-                    if index >= 0:
-                        baseColorTexture = {
-                            'index': index
-                        }
+                    if not 'baseColorFactor' in pbrMetallicRoughness:
+                        pbrMetallicRoughness['baseColorFactor'] = [1.0,1.0,1.0,1.0]
+                    pbrMetallicRoughness['baseColorFactor'][3] = 1-transmission
 
-                        texCoord = get_texcoord_index(glTF, 'Base Color', blender_node)
-                        if texCoord > 0:
-                            baseColorTexture['texCoord'] = texCoord
+                if alpha_mode:
+                    material['alphaMode'] = alpha_mode
 
-                        pbrMetallicRoughness['baseColorTexture'] = baseColorTexture
+                #
+                # Apply base color texture
+                #
+                if base_color_texture_index >= 0:
+                    baseColorTexture = {
+                        'index': base_color_texture_index
+                    }
 
-                    #
-                    # Base color factor
-                    #
-                    color = [1.0, 1.0, 1.0, 1.0]
-                    base_color_input = blender_node.inputs['Base Color']
-                    if base_color_input.is_linked:
-                        color = base_color_input.default_value
+                    texCoord = get_texcoord_index(glTF, 'Base Color', principled_node)
+                    if texCoord > 0:
+                        baseColorTexture['texCoord'] = texCoord
 
-                    color = get_base_color_principled(blender_node)
+                    pbrMetallicRoughness['baseColorTexture'] = baseColorTexture
 
-                    baseColorFactor = get_vec4(color, [1.0, 1.0, 1.0, 1.0])
-                    if baseColorFactor[0] != 1.0 or baseColorFactor[1] != 1.0 or baseColorFactor[2] != 1.0 or \
-                            baseColorFactor[3] != 1.0:
-                        pbrMetallicRoughness['baseColorFactor'] = baseColorFactor
+                #
+                # Normal texture
+                #
+                index = get_texture_index(export_settings, glTF, bpy.types.ShaderNodeBsdfPrincipled, 'Normal', principled_node)
+                if index >= 0:
+                    normalTexture = {
+                        'index': index
+                    }
 
-                    #
-                    # Metallic factor
-                    #
-                    metallicFactor = get_scalar(blender_node.inputs['Metallic'].default_value, 1.0)
-                    if metallicFactor != 1.0:
-                        pbrMetallicRoughness['metallicFactor'] = metallicFactor
+                    texCoord = get_texcoord_index(glTF, 'Normal', principled_node)
+                    if texCoord > 0:
+                        normalTexture['texCoord'] = texCoord
 
-                    #
-                    # Roughness factor
-                    #
-                    roughnessFactor = get_scalar(blender_node.inputs['Roughness'].default_value, 1.0)
-                    if roughnessFactor != 1.0:
-                        pbrMetallicRoughness['roughnessFactor'] = roughnessFactor
+                    scale = get_normal_strength(principled_node)
 
-                    material['name'] = blender_material.name
-                    materials.append(material)
+                    if scale and scale != 1.0:
+                        normalTexture['scale'] = scale
 
-                    #
-                    # Alpha
-                    #
-                    transmission = get_scalar(blender_node.inputs['Transmission'].default_value, 0.0)
-                    print('transmission {}'.format(transmission))
-                    if transmission > 0.0:
-                        alphaMode = 'BLEND'
-                        #alphaMode = 'MASK'
-                        material['alphaCutoff'] = 0.5
-                        material['alphaMode'] = alphaMode
+                    material['normalTexture'] = normalTexture
 
-                        if not 'baseColorFactor' in pbrMetallicRoughness:
-                            pbrMetallicRoughness['baseColorFactor'] = [1.0,1.0,1.0,1.0]
-                        pbrMetallicRoughness['baseColorFactor'][3] = 1-transmission
+                #
+                # Occlusion texture
+                #
+                # if len(principled_node.inputs['Occlusion'].links) > 0:
+                #     index = get_texture_index_by_node_group(export_settings, glTF, 'Occlusion', principled_node)
+                #     if index >= 0:
+                #         occlusionTexture = {
+                #             'index': index
+                #         }
 
-                    #
-                    # Normal texture
-                    #
-                    index = get_texture_index_by_principled(export_settings, glTF, 'Normal', blender_node)
-                    if index >= 0:
-                        normalTexture = {
-                            'index': index
-                        }
+                #         texCoord = get_texcoord_index(glTF, 'Occlusion', principled_node)
+                #         if texCoord > 0:
+                #             occlusionTexture['texCoord'] = texCoord
 
-                        texCoord = get_texcoord_index(glTF, 'Normal', blender_node)
-                        if texCoord > 0:
-                            normalTexture['texCoord'] = texCoord
+                #         strength = get_scalar(principled_node.inputs['OcclusionStrength'].default_value, 1.0)
 
-                        scale = get_normal_strength(blender_node)
+                #         if strength != 1.0:
+                #             occlusionTexture['strength'] = strength
 
-                        if scale and scale != 1.0:
-                            normalTexture['scale'] = scale
+                #         material['occlusionTexture'] = occlusionTexture
 
-                        material['normalTexture'] = normalTexture
+                continue
 
-                    #
-                    # Occlusion texture
-                    #
-                    # if len(blender_node.inputs['Occlusion'].links) > 0:
-                    #     index = get_texture_index_by_node_group(export_settings, glTF, 'Occlusion', blender_node)
-                    #     if index >= 0:
-                    #         occlusionTexture = {
-                    #             'index': index
-                    #         }
-
-                    #         texCoord = get_texcoord_index(glTF, 'Occlusion', blender_node)
-                    #         if texCoord > 0:
-                    #             occlusionTexture['texCoord'] = texCoord
-
-                    #         strength = get_scalar(blender_node.inputs['OcclusionStrength'].default_value, 1.0)
-
-                    #         if strength != 1.0:
-                    #             occlusionTexture['strength'] = strength
-
-                    #         material['occlusionTexture'] = occlusionTexture
+            for blender_node in blender_material.node_tree.nodes:
 
                 if isinstance(blender_node, bpy.types.ShaderNodeGroup):
 

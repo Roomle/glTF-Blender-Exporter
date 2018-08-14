@@ -160,7 +160,7 @@ def get_texture_index_by_node_group(export_settings, glTF, name, shader_node_gro
 
     return get_texture_index_by_image(glTF, from_node.image)
 
-def get_texture_index_by_principled(export_settings, glTF, name, node):
+def get_texture_index(export_settings, glTF, node_type, input_name, node):
     """
     Return the texture index in the glTF array.
     """
@@ -168,16 +168,16 @@ def get_texture_index_by_principled(export_settings, glTF, name, node):
     if node is None:
         return -1
     
-    if not isinstance(node, bpy.types.ShaderNodeBsdfPrincipled):
+    if not isinstance(node, node_type):
         return -1
 
-    if node.inputs.get(name) is None:
+    if node.inputs.get(input_name) is None:
         return -1
     
-    if len(node.inputs[name].links) == 0:
+    if len(node.inputs[input_name].links) == 0:
         return -1
     
-    from_node = node.inputs[name].links[0].from_node
+    from_node = node.inputs[input_name].links[0].from_node
     
     #
 
